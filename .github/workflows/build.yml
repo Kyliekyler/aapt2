@@ -22,7 +22,7 @@ jobs:
     strategy:
       matrix:
         #target_arch: [x86_64, x86, arm64-v8a, armeabi-v7a]
-        target_arch: [arm64-v8a]
+        target_arch: [armeabi-v7a]
       fail-fast: false
     steps:
       - name: Checkout
