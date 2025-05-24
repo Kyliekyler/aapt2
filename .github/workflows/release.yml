@@ -3,56 +3,52 @@ name: Release
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-      - dev
+    branches: [main, dev]
 
 jobs:
   build:
-    name: Build
+    name: Build AAPT2
     runs-on: ubuntu-latest
     strategy:
       matrix:
         target_arch: [x86_64, x86, arm64-v8a, armeabi-v7a]
       fail-fast: false
     steps:
-      - name: Checkout
+      - name: Checkout repository (with submodules)
         uses: actions/checkout@v4
         with:
-          submodules: 'true'
+          submodules: true
 
-      - name: Setup NDK
+      - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
         id: setup-ndk
         with:
           ndk-version: r27c
           add-to-path: false
 
-      - name: Patch
+      - name: Apply patches
         run: bash ./patch.sh
 
-      - name: Compile protoc
+      - name: Build protoc
         run: |
-          mkdir -p src/protobuf/build
-          pushd src/protobuf/build
-          cmake -GNinja -Dprotobuf_BUILD_TESTS=OFF ..
-          ninja -j$(nproc --all)
-          popd
+          cmake -S src/protobuf -B src/protobuf/build -GNinja -Dprotobuf_BUILD_TESTS=OFF
+          cmake --build src/protobuf/build -- -j$(nproc)
 
-      - name: Compile aapt2
+      - name: Build AAPT2 for ${{ matrix.target_arch }}
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-          PROTOC_PATH: "/${{ github.workspace }}/src/protobuf/build/protoc"
+          PROTOC_PATH: "${{ github.workspace }}/src/protobuf/build/protoc"
         run: bash ./build.sh ${{ matrix.target_arch }}
 
-      - name: Upload artifacts
+      - name: Upload aapt2-${{ matrix.target_arch }} artifacts
         uses: actions/upload-artifact@v4
         with:
           name: aapt2-${{ matrix.target_arch }}
-          path: ${{ github.workspace }}/build/bin/aapt2-*
+          path: build/bin/aapt2-*
           if-no-files-found: error
-          
+
   release:
+    name: Create Release
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -60,42 +56,40 @@ jobs:
       contents: write
       attestations: write
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # Make sure the release step uses its own credentials:
-          # https://github.com/cycjimmy/semantic-release-action#private-packages
           persist-credentials: false
 
-      - name: Download all built artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: ./artifacts
           merge-multiple: true
 
-      - name: Generate attestations
-        if: ${{ steps.release.outputs.release_created }}
+      - name: Generate build attestations
         uses: actions/attest-build-provenance@v2
+        if: ${{ steps.release.outputs.release_created }}
         with:
           subject-path: ./artifacts/aapt2-*
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "lts/*"
+          node-version: 'lts/*'
           cache: 'npm'
 
-      - name: Install dependencies
-        run: npm install
+      - name: Install Node.js dependencies
+        run: npm ci
 
-      - name: Import GPG key
+      - name: Import GPG signing key
         uses: crazy-max/ghaction-import-gpg@v6
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
           fingerprint: ${{ vars.GPG_FINGERPRINT }}
 
-      - name: Release
+      - name: Run semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm exec semantic-release
